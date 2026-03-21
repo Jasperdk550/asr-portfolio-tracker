@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# R
+.Rhistory
+.RData
+.Rproj.user/
+
+# Charts (generated files, not source)
+charts/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Keep the data folder but not its contents
+data/*.json
+!data/.gitkeep
