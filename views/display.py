@@ -80,7 +80,7 @@ def show_portfolio_table(
         return
 
     table = Table(
-        title="📊  Portfolio Holdings",
+        title="Portfolio Holdings",
         box=box.ROUNDED,
         border_style="blue",
         header_style="bold cyan",
@@ -138,14 +138,14 @@ def show_portfolio_table(
 def show_weights_table(rows: List[dict], group_by: str) -> None:
     """Render an aggregated weight breakdown."""
     label_map = {
-        "sector": ("Sector", "🏭"),
-        "asset_class": ("Asset Class", "🏷"),
-        "ticker": ("Ticker", "📌"),
+        "sector":      "Sector",
+        "asset_class": "Asset Class",
+        "ticker":      "Ticker",
     }
-    label, emoji = label_map.get(group_by, (group_by, "•"))
+    label = label_map.get(group_by, group_by)
 
     table = Table(
-        title=f"{emoji}  Weights by {label}",
+        title=f"Weights by {label}",
         box=box.ROUNDED,
         border_style="cyan",
         header_style="bold cyan",
@@ -292,7 +292,7 @@ def show_risk_metrics(metrics: dict) -> None:
     console.print(
         Panel(
             "\n".join(lines),
-            title="📉  Risk Metrics (trailing 1 year)",
+            title="Risk Metrics (trailing 1 year)",
             border_style="magenta",
         )
     )
@@ -339,7 +339,7 @@ def show_simulation_summary(result) -> None:
     console.print(
         Panel(
             "\n".join(lines),
-            title="🎲  Monte Carlo Simulation Results",
+            title="Monte Carlo Simulation Results",
             border_style="green",
         )
     )
@@ -408,7 +408,7 @@ def print_warning(msg: str) -> None:
 def show_welcome() -> None:
     banner = """
 [bold cyan]╔══════════════════════════════════════════════╗
-║   📈  a.s.r. Investment Portfolio Tracker    ║
+║     a.s.r. Investment Portfolio Tracker    ║
 ║         Powered by yfinance & Monte Carlo    ║
 ╚══════════════════════════════════════════════╝[/bold cyan]
 Run [bold]python main.py --help[/bold] to see all commands.
@@ -462,7 +462,7 @@ def show_optimization_summary(result) -> None:
     console.print(
         Panel(
             "\n".join(lines),
-            title="📐  Efficient Frontier — Optimisation Summary",
+            title="Efficient Frontier — Optimisation Summary",
             border_style="green",
         )
     )
@@ -501,4 +501,265 @@ def show_optimization_summary(result) -> None:
 
     console.print()
     console.print(table)
+    console.print()
+
+
+# ---------------------------------------------------------------------------
+# Black-Litterman display
+# ---------------------------------------------------------------------------
+
+def show_bl_summary(result) -> None:
+    """Display the Black-Litterman results in structured panels."""
+
+    def fp(v):
+        """Format annualised return as coloured percent."""
+        if v is None or (isinstance(v, float) and (v != v)):
+            return "N/A"
+        pct = v * 100
+        sign = "+" if pct > 0 else ""
+        txt = f"{sign}{pct:.2f}%"
+        c = "green" if pct > 0 else "red"
+        return f"[{c}]{txt}[/{c}]"
+
+    console.print()
+    console.print(
+        Panel(
+            "\n".join([
+                f"[bold cyan]Model:[/bold cyan]           Black-Litterman (Baele / Goldman Sachs, 1992)",
+                f"[bold cyan]Risk aversion γ:[/bold cyan]  {result.gamma:.3f}",
+                f"[bold cyan]Prior weight τ:[/bold cyan]   {result.tau*100:.1f}%  (uncertainty around equilibrium)",
+                f"[bold cyan]Risk-free rate:[/bold cyan]   {result.risk_free*100:.1f}%",
+                f"[bold cyan]Implied MRP:[/bold cyan]      {result.implied_mrp*100:.2f}%  (γ × w'Σw)",
+                f"[bold cyan]Views loaded:[/bold cyan]     {len(result.views)}",
+            ]),
+            title="Black-Litterman Configuration",
+            border_style="cyan",
+        )
+    )
+
+    # ── Views table ──────────────────────────────────────────────────
+    vt = Table(title="Investor Views  (P matrix, Q vector, Idzorek Ω)",
+               box=box.ROUNDED, border_style="yellow", header_style="bold cyan",
+               expand=False)
+    vt.add_column("#",           style="dim",        width=3)
+    vt.add_column("Type",        style="bold white",  width=9)
+    vt.add_column("Description", style="white",       max_width=38)
+    vt.add_column("Q (view)",    justify="right",     width=10)
+    vt.add_column("Confidence",  justify="right",     width=11)
+    vt.add_column("Ω_kk",        justify="right",     width=10)
+
+    for k, view in enumerate(result.views):
+        omega_kk = result.Omega[k, k]
+        c = "green" if view.expected_return >= 0 else "red"
+        sign = "+" if view.expected_return >= 0 else ""
+        vt.add_row(
+            str(k + 1),
+            f"[cyan]{view.type}[/cyan]",
+            view.description[:38],
+            f"[{c}]{sign}{view.expected_return*100:.2f}%[/{c}]",
+            f"{view.confidence*100:.0f}%",
+            f"{omega_kk:.5f}",
+        )
+    console.print()
+    console.print(vt)
+
+    # ── Return comparison table ───────────────────────────────────────
+    rt = Table(
+        title="Expected Excess Returns: Equilibrium vs BL Posterior",
+        box=box.ROUNDED, border_style="blue", header_style="bold cyan", expand=False
+    )
+    rt.add_column("Ticker",     style="bold white")
+    rt.add_column("Historical", justify="right")
+    rt.add_column("Equilibrium μ_eq", justify="right")
+    rt.add_column("BL Posterior μ_BL", justify="right")
+    rt.add_column("Revision Δ", justify="right")
+    rt.add_column("Driver",     style="dim")
+
+    tickers = result.tickers
+    for i, t in enumerate(tickers):
+        hist_r  = result.mu_hist[i]
+        eq_r    = result.mu_eq[i]
+        bl_r    = result.mu_bl[i]
+        delta   = bl_r - eq_r
+
+        # Which views affect this ticker?
+        view_tags = []
+        for k, view in enumerate(result.views):
+            if t in view.assets:
+                direction = "↑" if result.P[k, i] > 0 else "↓"
+                view_tags.append(f"V{k+1}{direction}")
+        driver = ", ".join(view_tags) if view_tags else "correlation spill"
+
+        rt.add_row(
+            t,
+            fp(hist_r),
+            fp(eq_r),
+            fp(bl_r),
+            fp(delta),
+            driver,
+        )
+    console.print()
+    console.print(rt)
+
+    # ── Weight rebalancing table ──────────────────────────────────────
+    wt = Table(
+        title="Optimal Weights: Current (Equilibrium) → BL Optimal",
+        box=box.ROUNDED, border_style="green", header_style="bold cyan", expand=False
+    )
+    wt.add_column("Ticker",       style="bold white")
+    wt.add_column("Current",      justify="right")
+    wt.add_column("BL Optimal",   justify="right")
+    wt.add_column("Delta",        justify="right")
+    wt.add_column("Action",       justify="left")
+
+    rb = result.rebalancing
+    for _, row in rb.iterrows():
+        delta = row["delta"]
+        c = "green" if delta > 0.005 else "red" if delta < -0.005 else "dim"
+        sign = "+" if delta > 0 else ""
+        if abs(delta) < 0.005:
+            action = "[dim]Hold[/dim]"
+        elif delta > 0:
+            action = "[green]Increase ↑[/green]"
+        else:
+            action = "[red]Reduce  ↓[/red]"
+
+        wt.add_row(
+            row["ticker"],
+            f"{row['w_current']*100:.2f}%",
+            f"{row['w_bl_constrained']*100:.2f}%",
+            f"[{c}]{sign}{delta*100:.2f}%[/{c}]",
+            action,
+        )
+    console.print()
+    console.print(wt)
+    console.print()
+
+
+# ---------------------------------------------------------------------------
+# Excel import display
+# ---------------------------------------------------------------------------
+
+def show_import_preview(result) -> None:
+    """Show a full validation report before importing."""
+
+    # ── File summary panel ────────────────────────────────────────────
+    status_colour = "green" if not result.has_errors else "yellow"
+    status_txt    = "Ready to import" if not result.has_errors else "Import with warnings"
+    if result.n_valid == 0:
+        status_colour = "red"
+        status_txt    = "✗ No valid rows found"
+
+    summary_lines = [
+        f"[bold]File:[/bold]        {result.filepath}",
+        f"[bold]Sheet:[/bold]       {result.sheet_name}",
+        f"[bold]Total rows:[/bold]  {result.total_rows}",
+        f"[bold cyan]Valid rows:[/bold cyan]  [{status_colour}]{result.n_valid}[/{status_colour}]",
+        f"[bold red]Error rows:[/bold red] {result.n_errors}",
+    ]
+    console.print()
+    console.print(
+        Panel("\n".join(summary_lines),
+              title=f"[{status_colour}]{status_txt}[/{status_colour}]  —  Import Preview",
+              border_style=status_colour)
+    )
+
+    # ── Column mapping ────────────────────────────────────────────────
+    cm_table = Table(title="Column Mapping  (your headers → tracker fields)",
+                     box=box.SIMPLE_HEAD, border_style="dim",
+                     header_style="bold", expand=False)
+    cm_table.add_column("Your Column",    style="white")
+    cm_table.add_column("Mapped To",      style="cyan")
+    cm_table.add_column("Required",       justify="center")
+
+    required_fields = {"ticker", "quantity", "purchase_price"}
+    for canonical, actual in sorted(result.column_mapping.items()):
+        req = "★" if canonical in required_fields else ""
+        cm_table.add_row(actual, canonical, f"[yellow]{req}[/yellow]")
+
+    # Show unmapped required fields
+    for req in required_fields:
+        if req not in result.column_mapping:
+            cm_table.add_row("[red]NOT FOUND[/red]", req, "[red]★ MISSING[/red]")
+
+    console.print()
+    console.print(cm_table)
+
+    # ── Valid rows preview ────────────────────────────────────────────
+    if result.valid_rows:
+        prev_table = Table(
+            title=f"Positions to Import  ({result.n_valid} rows)",
+            box=box.ROUNDED, border_style="green",
+            header_style="bold cyan", expand=True
+        )
+        prev_table.add_column("Row",    style="dim",  width=4)
+        prev_table.add_column("Ticker", style="bold white", width=8)
+        prev_table.add_column("Name",   style="dim",  max_width=22)
+        prev_table.add_column("Sector", style="cyan", max_width=16)
+        prev_table.add_column("Class",  width=10)
+        prev_table.add_column("Qty",    justify="right", width=10)
+        prev_table.add_column("Price",  justify="right", width=10)
+        prev_table.add_column("Date",   width=12)
+        prev_table.add_column("CCY",    width=5)
+        prev_table.add_column("Txn Value", justify="right", width=12)
+
+        for r in result.valid_rows:
+            txn = r.quantity * r.purchase_price
+            prev_table.add_row(
+                str(r.source_row),
+                r.ticker,
+                r.name[:22] if r.name else "—",
+                r.sector[:16],
+                r.asset_class,
+                f"{r.quantity:,.4f}",
+                f"${r.purchase_price:,.2f}",
+                r.purchase_date,
+                r.currency,
+                f"${txn:,.2f}",
+            )
+
+        console.print()
+        console.print(prev_table)
+
+    # ── Errors ────────────────────────────────────────────────────────
+    if result.errors:
+        err_table = Table(
+            title=f"[red]Validation Errors  ({result.n_errors})[/red]",
+            box=box.ROUNDED, border_style="red",
+            header_style="bold red", expand=False
+        )
+        err_table.add_column("Row",    style="dim",  width=4)
+        err_table.add_column("Column", style="bold", width=16)
+        err_table.add_column("Value",  style="dim",  width=20)
+        err_table.add_column("Reason", style="white")
+
+        for e in result.errors:
+            err_table.add_row(
+                str(e.row) if e.row else "—",
+                e.column,
+                e.value[:20] if e.value else "—",
+                e.reason,
+            )
+        console.print()
+        console.print(err_table)
+
+    # ── Warnings ──────────────────────────────────────────────────────
+    if result.warnings:
+        console.print()
+        for w in result.warnings:
+            print_warning(w)
+
+    console.print()
+
+
+def show_import_success(n_imported: int, skipped: int = 0) -> None:
+    """Confirmation message after successful import."""
+    console.print(
+        Panel(
+            f"[bold green]{n_imported} position(s) imported successfully.[/bold green]\n"
+            + (f"[dim]{skipped} row(s) skipped due to errors.[/dim]" if skipped else ""),
+            title="✓  Import Complete",
+            border_style="green",
+        )
+    )
     console.print()

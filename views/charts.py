@@ -170,8 +170,8 @@ def plot_allocation(
             bbox_to_anchor=(0.5, -0.15),
         )
 
-    _donut(ax1, weights_by_sector, "sector", "🏭  By Sector")
-    _donut(ax2, weights_by_class, "asset_class", "🏷  By Asset Class")
+    _donut(ax1, weights_by_sector, "sector", "By Sector")
+    _donut(ax2, weights_by_class, "asset_class", "By Asset Class")
 
     fig.suptitle("Portfolio Allocation", color="white",
                  fontsize=15, fontweight="bold", y=1.01)
@@ -564,3 +564,125 @@ def plot_efficient_frontier(
                  color="white", fontsize=14, fontweight="bold", y=1.02)
 
     return _save_or_show(fig, save_path, "efficient_frontier")
+
+
+# ------------------------------------------------------------------
+# 8 – Black-Litterman chart
+# ------------------------------------------------------------------
+
+def plot_black_litterman(
+    result,
+    save_path: Optional[str] = None,
+) -> str:
+    """
+    Four-panel Black-Litterman summary chart:
+      Top-left  — Return comparison bar chart (hist / eq / BL per ticker)
+      Top-right — Return revision heatmap (view propagation via Σ)
+      Bot-left  — Weight shift: current vs BL optimal
+      Bot-right — Correlation heatmap of the portfolio
+    """
+    fig = plt.figure(figsize=(18, 11), facecolor="#0d1117")
+    gs  = fig.add_gridspec(2, 2, hspace=0.42, wspace=0.32)
+    ax_ret  = fig.add_subplot(gs[0, 0])
+    ax_heat = fig.add_subplot(gs[0, 1])
+    ax_wgt  = fig.add_subplot(gs[1, 0])
+    ax_corr = fig.add_subplot(gs[1, 1])
+
+    tickers = result.tickers
+    n       = len(tickers)
+    x       = np.arange(n)
+    w       = 0.26
+
+    # ── Top-left: return comparison bars ───────────────────────────
+    _apply_style(ax_ret)
+    ax_ret.bar(x - w,   result.mu_hist * 100,  w, label="Historical",   color="#555555",  alpha=0.9)
+    ax_ret.bar(x,       result.mu_eq   * 100,  w, label="Equilibrium",  color=ASR_BLUE,   alpha=0.9)
+    ax_ret.bar(x + w,   result.mu_bl   * 100,  w, label="BL Posterior", color=ASR_GREEN,  alpha=0.9)
+    ax_ret.axhline(0, color="#666666", linewidth=0.7)
+    ax_ret.set_xticks(x)
+    ax_ret.set_xticklabels(tickers, rotation=30, ha="right", color="#cccccc", fontsize=9)
+    ax_ret.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"{v:.1f}%"))
+    ax_ret.set_title("Expected Excess Returns\n(Historical | Equilibrium | BL Posterior)",
+                     fontsize=11, fontweight="bold", color="white")
+    ax_ret.legend(facecolor="#1f2937", labelcolor="white", fontsize=8)
+
+    # ── Top-right: return revision as annotated heatmap ─────────────
+    _apply_style(ax_heat)
+    revision = (result.mu_bl - result.mu_eq) * 100  # %
+    im = ax_heat.imshow(
+        revision.reshape(1, n),
+        cmap="RdYlGn", vmin=-max(abs(revision).max(), 0.01),
+        vmax=max(abs(revision).max(), 0.01), aspect="auto"
+    )
+    ax_heat.set_xticks(range(n))
+    ax_heat.set_xticklabels(tickers, rotation=30, ha="right", color="#cccccc", fontsize=9)
+    ax_heat.set_yticks([])
+    for i, r in enumerate(revision):
+        sign = "+" if r >= 0 else ""
+        ax_heat.text(i, 0, f"{sign}{r:.2f}%",
+                     ha="center", va="center", fontsize=9,
+                     fontweight="bold",
+                     color="black" if abs(r) < 0.5 * abs(revision).max() else "white")
+    plt.colorbar(im, ax=ax_heat, fraction=0.046, pad=0.02).set_label(
+        "Δ Return (%)", color="#cccccc", fontsize=8
+    )
+    ax_heat.set_title("Return Revision (μ_BL − μ_eq)\nView propagation via Σ",
+                      fontsize=11, fontweight="bold", color="white")
+
+    # ── Bot-left: weight comparison ─────────────────────────────────
+    _apply_style(ax_wgt)
+    w_cur = result.w_market         * 100
+    w_bl  = result.w_bl_constrained * 100
+    ax_wgt.bar(x - w/2, w_cur, w, label="Current",    color="#E74C3C", alpha=0.85, edgecolor="#0d1117")
+    ax_wgt.bar(x + w/2, w_bl,  w, label="BL Optimal", color=ASR_GREEN, alpha=0.85, edgecolor="#0d1117")
+
+    for i, (c, b) in enumerate(zip(w_cur, w_bl)):
+        delta = b - c
+        c_col = ASR_GREEN if delta >= 0 else "#E74C3C"
+        sign  = "+" if delta >= 0 else ""
+        ax_wgt.text(x[i], max(c, b) + 0.5,
+                    f"{sign}{delta:.1f}%",
+                    ha="center", va="bottom", fontsize=7,
+                    color=c_col, fontweight="bold")
+
+    ax_wgt.set_xticks(x)
+    ax_wgt.set_xticklabels(tickers, rotation=30, ha="right", color="#cccccc", fontsize=9)
+    ax_wgt.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"{v:.0f}%"))
+    ax_wgt.set_title("Current vs BL Optimal Weights\n(long-only constrained)",
+                     fontsize=11, fontweight="bold", color="white")
+    ax_wgt.legend(facecolor="#1f2937", labelcolor="white", fontsize=8)
+
+    # ── Bot-right: P matrix heatmap (which assets each view touches) ─
+    _apply_style(ax_corr)
+    P = result.P
+    K = P.shape[0]
+    if K > 0:
+        im2 = ax_corr.imshow(P, cmap="RdYlGn", vmin=-1, vmax=1, aspect="auto")
+        ax_corr.set_xticks(range(n))
+        ax_corr.set_xticklabels(tickers, rotation=30, ha="right", color="#cccccc", fontsize=9)
+        ax_corr.set_yticks(range(K))
+        view_labels = [f"V{k+1}: {result.views[k].description[:18]}…"
+                       if len(result.views[k].description) > 18
+                       else f"V{k+1}: {result.views[k].description}"
+                       for k in range(K)]
+        ax_corr.set_yticklabels(view_labels, color="#cccccc", fontsize=8)
+        for ki in range(K):
+            for ni in range(n):
+                val = P[ki, ni]
+                if val != 0:
+                    ax_corr.text(ni, ki, f"{val:+.0f}",
+                                 ha="center", va="center",
+                                 fontsize=9, fontweight="bold",
+                                 color="black" if abs(val) < 0.8 else "white")
+        plt.colorbar(im2, ax=ax_corr, fraction=0.046, pad=0.02)
+        ax_corr.set_title("View Selection Matrix P\n(+1 = long, −1 = short)",
+                          fontsize=11, fontweight="bold", color="white")
+    else:
+        ax_corr.text(0.5, 0.5, "No views defined", ha="center", va="center",
+                     color="white", fontsize=12, transform=ax_corr.transAxes)
+
+    fig.suptitle(
+        "Black-Litterman Model  —  Equilibrium × Views = Posterior",
+        color="white", fontsize=14, fontweight="bold", y=1.005,
+    )
+    return _save_or_show(fig, save_path, "black_litterman")
