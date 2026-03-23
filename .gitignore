@@ -5,18 +5,13 @@ __pycache__/
 .venv/
 *.egg-info/
 
-# R
-.Rhistory
-.RData
-.Rproj.user/
-
-# Charts (generated files, not source)
+# Charts (generated)
 charts/
 
-# OS files
+# OS
 .DS_Store
 Thumbs.db
 
-# Keep the data folder but not its contents
+# Keep data folder structure but not contents
 data/*.json
 !data/.gitkeep

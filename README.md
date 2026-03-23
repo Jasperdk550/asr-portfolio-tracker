@@ -1,7 +1,11 @@
 # 📈 a.s.r. Investment Portfolio Tracker
 
-A command-line investment portfolio tracker built in Python, following the **Model-View-Controller (MVC)** design pattern.  
-Track holdings, monitor live prices, analyse risk metrics, and run a 100 000-path Monte Carlo simulation over a 15-year horizon.
+A professional command-line investment portfolio tracker built in Python,
+following the **Model-View-Controller (MVC)** design pattern.
+
+Track holdings, monitor live prices, analyse risk metrics, run a 100 000-path
+Monte Carlo simulation, optimise with Markowitz and Black-Litterman, and import
+existing portfolios directly from Excel.
 
 ---
 
@@ -9,15 +13,18 @@ Track holdings, monitor live prices, analyse risk metrics, and run a 100 000-pat
 
 | Feature | Command |
 |---|---|
-| Add / remove positions | `add`, `remove` |
+| Import existing portfolio from Excel / CSV | `import-excel` |
+| Add / remove individual positions | `add`, `remove` |
+| Full portfolio table with live P&L | `show` |
 | Live & historical prices + charts | `prices` |
-| Full portfolio table with P&L | `show` |
 | Weights by ticker / sector / asset class | `weights` |
 | Risk metrics (Sharpe, VaR, CVaR, Beta, Drawdown) | `metrics` |
 | Benchmark comparison chart | `metrics --graph` |
 | Correlation matrix heatmap | `metrics --corr` |
 | Monte Carlo simulation (100 000 paths, 15 years) | `simulate` |
-| Export to CSV or all charts at once | `export` |
+| Markowitz Efficient Frontier + rebalancing | `optimize` |
+| Black-Litterman model with investor views | `bl` |
+| Export to CSV or generate all charts | `export` |
 
 ---
 
@@ -25,26 +32,30 @@ Track holdings, monitor live prices, analyse risk metrics, and run a 100 000-pat
 
 ```
 portfolio_tracker/
-├── main.py                          ← Entry point
+├── main.py                              ← Entry point
+├── requirements.txt                     ← All dependencies
 ├── models/
-│   ├── asset.py                     ← Asset dataclass & P&L helpers
-│   ├── portfolio.py                 ← Portfolio logic, yfinance, persistence
-│   └── simulation.py                ← Monte Carlo simulation engine
+│   ├── asset.py                         ← Asset dataclass & lot-level P&L
+│   ├── portfolio.py                     ← Core: prices, weights, risk metrics
+│   ├── simulation.py                    ← Monte Carlo engine (100k paths, GBM)
+│   ├── optimizer.py                     ← Markowitz Efficient Frontier
+│   ├── black_litterman.py               ← Black-Litterman model (1992)
+│   └── excel_importer.py               ← Excel / CSV import with fuzzy matching
 ├── views/
-│   ├── display.py                   ← Rich terminal tables & panels
-│   └── charts.py                    ← Matplotlib / seaborn charts
+│   ├── display.py                       ← Rich terminal tables & panels
+│   └── charts.py                        ← Matplotlib charts (8 chart types)
 ├── controllers/
-│   └── portfolio_controller.py      ← Click CLI — wires Model ↔ View
+│   └── portfolio_controller.py          ← Click CLI — wires Model ↔ View
 ├── data/
-│   └── portfolio.json               ← Auto-created; persists your portfolio
-└── charts/                          ← Auto-created; saved chart images
+│   └── portfolio.json                   ← Auto-created; persists your portfolio
+└── charts/                              ← Auto-created; saved chart images
 ```
 
 | Layer | Responsibility |
 |---|---|
-| **Model** | Stores & calculates all portfolio data; owns yfinance calls; saves to JSON |
-| **View** | Renders Rich tables, panels, and Matplotlib charts — no business logic |
-| **Controller** | Parses CLI arguments, calls Model, hands results to View |
+| **Model** | All data, calculations and persistence — zero UI code |
+| **View** | All terminal output and chart rendering — zero business logic |
+| **Controller** | CLI parsing; calls Model methods; passes results to View |
 
 ---
 
@@ -52,209 +63,236 @@ portfolio_tracker/
 
 ### Prerequisites
 
-- Python ≥ 3.10  →  https://www.python.org/downloads/
-  - **Windows**: on the installer's first screen, tick **"Add Python to PATH"**
-- Internet connection (for live price data)
-
----
+- **Python >= 3.10** → https://www.python.org/downloads/
+- **Windows**: tick "Add Python to PATH" on the installer's first screen.
 
 ### Installation — Windows (PowerShell)
 
 ```powershell
-# 1. Unzip and navigate into the project folder
 cd C:\path\to\portfolio_tracker
-
-# 2. Create a virtual environment
 python -m venv .venv
-
-# 3. Activate it  (if you get a permissions error, see note below)
 .venv\Scripts\Activate.ps1
-
-# 4. Install dependencies
 pip install -r requirements.txt
 ```
 
-> **Permissions error?**  Run this once, then retry step 3:
-> ```powershell
-> Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-> ```
+If you get a permissions error on activation:
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
 
----
-
-### Installation — macOS / Linux (Terminal)
+### Installation — macOS / Linux
 
 ```bash
-# 1. Navigate into the project folder
 cd /path/to/portfolio_tracker
-
-# 2. Create and activate a virtual environment
 python -m venv .venv
 source .venv/bin/activate
-
-# 3. Install dependencies
 pip install -r requirements.txt
+```
+
+### Verify
+
+```powershell
+python main.py --help
 ```
 
 ---
 
 ## Quick Start
 
-```bash
-# Add some positions
-python main.py add AAPL  -s Technology     -c Equity -q 10   -p 178.50
-python main.py add MSFT  -s Technology     -c Equity -q 5    -p 380.00
-python main.py add BND   -s "Fixed Income" -c Bond   -q 50   -p 72.30
-python main.py add GLD   -s Commodity      -c Commodity -q 8 -p 185.00 --date 2024-01-15
+### Option A — Import an existing portfolio from Excel
 
-# View your portfolio (fetches live prices)
+```powershell
+python main.py import-excel --create-template
+# Edit portfolio_template.xlsx, then:
+python main.py import-excel --file portfolio_template.xlsx
 python main.py show
+```
 
-# See weight breakdowns
-python main.py weights --by sector
-python main.py weights --by asset_class --graph
+### Option B — Enter positions manually
 
-# Check prices with a chart
-python main.py prices AAPL MSFT --period 2y --graph
-
-# Risk analytics
-python main.py metrics --graph --corr
-
-# Run the simulation (100 000 paths × 15 years)
-python main.py simulate
-
-# Export everything
-python main.py export --format charts-all
-python main.py export --format csv --output my_portfolio.csv
+```powershell
+python main.py add AAPL  -s Technology     -c Equity    -q 10  -p 178.50
+python main.py add MSFT  -s Technology     -c Equity    -q 5   -p 380.00
+python main.py add BND   -s "Fixed Income" -c Bond      -q 50  -p 72.30
+python main.py add GLD   -s Commodity      -c Commodity -q 8   -p 185.00
+python main.py show
 ```
 
 ---
 
 ## Command Reference
 
-### `add` — Add a position
+### `import-excel` — Import from Excel or CSV
 
-```
-python main.py add <TICKER> [OPTIONS]
+```powershell
+# Generate a professional template
+python main.py import-excel --create-template
 
-Options:
-  -s, --sector TEXT          Business sector  [required]
-  -c, --asset-class TEXT     Asset class (Equity|ETF|Bond|Crypto|Commodity|Real Estate|Other)  [required]
-  -q, --quantity FLOAT       Number of units  [required]
-  -p, --purchase-price FLOAT Price per unit   [required]
-  -d, --date TEXT            Purchase date YYYY-MM-DD  [default: today]
-  --currency TEXT            Currency  [default: USD]
+# Validate without writing anything
+python main.py import-excel --file my_portfolio.xlsx --dry-run
+
+# Import (shows preview, asks confirmation)
+python main.py import-excel --file my_portfolio.xlsx
+
+# Import from a specific sheet
+python main.py import-excel --file workbook.xlsx --sheet Holdings
+
+# Import a CSV file
+python main.py import-excel --file broker_export.csv --yes
 ```
+
+The importer auto-recognises 40+ column name variants:
+
+| Your column header | Mapped to |
+|---|---|
+| Ticker / Symbol / Stock / ISIN | `ticker` |
+| Quantity / Qty / Shares / Units | `quantity` |
+| Purchase Price / Avg Price / Cost | `purchase_price` |
+| Sector / Industry / Category | `sector` |
+| Asset Class / Type / Class | `asset_class` |
+| Purchase Date / Buy Date / Trade Date | `purchase_date` |
+| Currency / CCY | `currency` |
+
+Always shows a full validation preview and error report before writing.
+
+---
+
+### `add` — Add a position manually
+
+```powershell
+python main.py add AAPL  -s Technology -c Equity    -q 10  -p 178.50
+python main.py add BTC-USD -s Crypto   -c Crypto    -q 0.5 -p 42000 --date 2024-01-10
+```
+
+Asset classes: `Equity` | `ETF` | `Bond` | `Crypto` | `Commodity` | `Real Estate` | `Other`
 
 ### `remove` — Remove a position
 
-```
-python main.py remove <POSITION_ID> [--yes]
-```
-
-The 8-character `POSITION_ID` is shown in the ID column of `show`.
-
-### `show` / `list` — View holdings
-
-```
-python main.py show [--refresh]
+```powershell
+python main.py remove <8-CHAR-ID>         # ID shown in the show table
+python main.py remove a1b2c3d4 --yes      # skip confirmation
 ```
 
-Displays a full table with: ticker, name, sector, asset class, quantity,
-buy price, current price, cost basis, market value, absolute and relative P&L, and portfolio weight.
+### `show` — View holdings with live prices
 
-### `prices` — Price history
-
-```
-python main.py prices <TICKER> [TICKER ...] [OPTIONS]
-
-Options:
-  -p, --period   1d|5d|1mo|3mo|6mo|1y|2y|5y|10y|max  [default: 1y]
-  --interval     1d|1wk|1mo  [default: 1d]
-  -g, --graph    Save and open a price-history chart
-  -s, --save     Save chart to a specific file path
+```powershell
+python main.py show
 ```
 
-When multiple tickers are supplied, prices are **normalised to 100** so
-returns are directly comparable.
+### `prices` — Historical prices and charts
 
-### `weights` — Portfolio allocation
-
+```powershell
+python main.py prices AAPL
+python main.py prices AAPL MSFT --period 2y --graph
 ```
-python main.py weights [--by ticker|sector|asset_class] [-g] [-s PATH]
+
+### `weights` — Portfolio allocation breakdown
+
+```powershell
+python main.py weights --by sector
+python main.py weights --by asset_class --graph
 ```
 
 ### `simulate` — Monte Carlo simulation
 
-```
-python main.py simulate [OPTIONS]
-
-Options:
-  --paths  INT   Number of paths  [default: 100000]
-  --years  INT   Forecast horizon  [default: 15]
-  --period TEXT  History used for calibration  [default: 5y]
-  -s, --save     Save chart path
-  --no-graph     Skip chart generation
+```powershell
+python main.py simulate
+python main.py simulate --paths 50000 --years 10
 ```
 
-**Methodology:**
-- Per-asset drift (μ) and volatility (σ) estimated from historical daily log-returns.
-- Cholesky decomposition of the historical correlation matrix used to generate correlated shocks.
-- Geometric Brownian Motion for each asset; portfolio value computed from weighted asset paths.
-- 100 000 paths simulated in memory-efficient batches of 5 000.
-- Fan chart shows 5 / 10 / 25 / 50 / 75 / 90 / 95th percentile paths.
-- Terminal histogram and CDF included.
+Geometric Brownian Motion with correlated shocks (Cholesky of Σ).
+Output: fan chart, terminal histogram, CDF, and scenario probabilities.
 
 ### `metrics` — Risk analytics
 
-```
-python main.py metrics [OPTIONS]
-
-Options:
-  --benchmark TEXT  Benchmark ticker  [default: ^GSPC (S&P 500)]
-  --period TEXT     Look-back period  [default: 1y]
-  -g, --graph       Plot portfolio vs benchmark
-  --corr            Generate correlation matrix heatmap
+```powershell
+python main.py metrics
+python main.py metrics --benchmark ^FTSE --period 2y --graph --corr
 ```
 
-Metrics computed:
-- Annualised return & volatility
-- Sharpe ratio (risk-free rate assumed 4.5 %)
-- Maximum drawdown
-- 1-day VaR and CVaR at 95 % confidence (historical simulation)
-- Beta relative to benchmark
+Sharpe ratio, Max Drawdown, VaR, CVaR (95%), Beta vs benchmark.
 
-### `export` — Data export
+### `optimize` — Markowitz Efficient Frontier
 
+```powershell
+python main.py optimize
+python main.py optimize --period 5y
 ```
-python main.py export [--format csv|charts-all] [-o OUTPUT]
+
+Finds the Maximum Sharpe Ratio and Minimum Variance portfolios.
+Plots the full frontier with your current portfolio marked, and
+produces a concrete rebalancing table.
+
+### `bl` — Black-Litterman model
+
+```powershell
+# Step 1: generate a views template
+python main.py bl --init-views
+
+# Step 2: edit views_bl.json with your views, then:
+python main.py bl --views-file views_bl.json
+python main.py bl --views-file views_bl.json --tau 0.10 --period 5y
+```
+
+Implements the full Black & Litterman (1992) model:
+- Reverse-optimised equilibrium: `mu_eq = gamma * Sigma * w`
+- Idzorek confidence method for Omega (intuitive 0-100% confidence)
+- Bayesian posterior: `mu_BL = [(tau*Sigma)^-1 + P'*Omega^-1*P]^-1 * [...]`
+- Long-only constrained optimal weights
+
+Views file (`views_bl.json`) format:
+```json
+{
+  "views": [
+    {
+      "description": "AAPL will outperform MSFT by 2%",
+      "type": "relative",
+      "assets": ["AAPL", "MSFT"],
+      "weights": [1, -1],
+      "expected_return": 0.02,
+      "confidence": 0.65
+    }
+  ]
+}
+```
+
+### `export` — Export data
+
+```powershell
+python main.py export
+python main.py export --format csv --output my_portfolio.csv
+python main.py export --format charts-all --output charts/
 ```
 
 ---
 
-## Charts Generated
+## Charts
 
-| Chart | Description |
-|---|---|
-| `price_history.png` | Closing price lines (normalised for multi-ticker) with daily return bar |
-| `allocation.png` | Side-by-side sector & asset-class donut charts |
-| `holdings_bar.png` | Horizontal bar chart of position market values |
-| `simulation.png` | Fan chart + terminal histogram + CDF |
-| `correlation.png` | Heatmap of pairwise return correlations |
-| `benchmark.png` | Cumulative return vs benchmark with over/underperformance shading |
-
-All charts use a dark theme and are saved as high-resolution PNG (150 dpi).
+| Chart | File | Description |
+|---|---|---|
+| Price history | `price_history.png` | Line chart, normalised for multi-ticker comparison |
+| Allocation | `allocation.png` | Sector & asset-class donut charts |
+| Holdings | `holdings_bar.png` | Market value horizontal bars |
+| Simulation | `simulation.png` | Fan chart + histogram + CDF |
+| Correlation | `correlation.png` | Return correlation heatmap |
+| Benchmark | `benchmark.png` | Portfolio vs index cumulative return |
+| Efficient Frontier | `efficient_frontier.png` | Frontier scatter + weight bars |
+| Black-Litterman | `black_litterman.png` | Return revisions + weight shifts + P matrix |
 
 ---
 
 ## Data Persistence
 
-All positions are automatically saved to `data/portfolio.json` after every `add` or `remove`.
-The file is human-readable and can be backed up or committed to version control.
+Positions are saved to `data/portfolio.json` after every write operation.
+The file is plain JSON — human-readable and safe to back up or commit.
 
-To use a different file (e.g. separate work and personal portfolios):
+The Python and R versions share the same file format and can be used
+interchangeably on the same `portfolio.json`.
 
-```bash
-python main.py --data-file data/work_portfolio.json show
+Multiple portfolios:
+```powershell
+python main.py --data-file data/work.json show
+python main.py --data-file data/personal.json simulate
 ```
 
 ---
@@ -267,36 +305,41 @@ python main.py --data-file data/work_portfolio.json show
 | `rich` | Terminal tables, panels, progress bars |
 | `yfinance` | Live & historical market data |
 | `matplotlib` | All charts |
-| `seaborn` | Optional enhanced aesthetics |
-| `numpy` | Numerical simulation |
+| `numpy` | Simulation and linear algebra |
 | `pandas` | Time-series data manipulation |
-| `scipy` | Statistical helpers |
+| `scipy` | Optimisation (Markowitz, Black-Litterman) |
+| `openpyxl` | Excel template generation and reading |
+| `xlrd` | Legacy .xls file support |
 
 ---
 
 ## Version Control
 
-This project uses Git.  Suggested workflow:
-
 ```bash
 git init
 git add .
-git commit -m "Initial project structure"
-
-# After adding positions:
-git add data/portfolio.json
-git commit -m "chore: update portfolio holdings"
+git commit -m "feat: initial MVC project structure"
+git remote add origin https://github.com/YOUR-USERNAME/asr-portfolio-tracker.git
+git branch -M main
+git push -u origin main
 ```
 
 ---
 
-## Extending the Application
+## Design Decisions
 
-Ideas for further development:
+**Why MVC?** Clean separation means the model never prints, the view never
+calculates, and the controller never accesses data directly. Adding
+Black-Litterman required only a new model file, one display function, and
+one CLI command — nothing else changed.
 
-- **Dividend reinvestment** — track dividend income separately.
-- **Tax-lot accounting** — FIFO/LIFO/specific-lot realised gain calculation.
-- **Efficient frontier** — plot the Markowitz frontier for the current holdings.
-- **Alert system** — email / Slack notification when a position moves > X %.
-- **Multi-currency support** — FX conversion to a base currency.
-- **Options overlay** — add call/put positions alongside equity lots.
+**Why Black-Litterman over plain Markowitz?** Markowitz produces weights like
++208% Canada, -352% Italy when fed historical returns — useless in practice.
+Black-Litterman anchors on equilibrium so assets with no view stay near market
+weights. Deviations are proportional to conviction. For an insurance company
+like a.s.r., this is the difference between a presentable portfolio and one
+that would never pass an investment committee.
+
+**Why 100 000 simulation paths?** The 5th-percentile path (worst-case tail
+risk) requires far more paths to converge than the median. At 10 000 paths
+the tail is still noisy; at 100 000 it is stable to within 0.1% across runs.
