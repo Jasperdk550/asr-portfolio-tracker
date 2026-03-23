@@ -1,4 +1,4 @@
-# 📈 a.s.r. Investment Portfolio Tracker
+# a.s.r. Investment Portfolio Tracker
 
 A professional command-line investment portfolio tracker built in Python,
 following the **Model-View-Controller (MVC)** design pattern.
