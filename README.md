@@ -59,44 +59,6 @@ portfolio_tracker/
 
 ---
 
-## Setup
-
-### Prerequisites
-
-- **Python >= 3.10** → https://www.python.org/downloads/
-- **Windows**: tick "Add Python to PATH" on the installer's first screen.
-
-### Installation — Windows (PowerShell)
-
-```powershell
-cd C:\path\to\portfolio_tracker
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
-
-If you get a permissions error on activation:
-```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-```
-
-### Installation — macOS / Linux
-
-```bash
-cd /path/to/portfolio_tracker
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-### Verify
-
-```powershell
-python main.py --help
-```
-
----
-
 ## Quick Start
 
 ### Option A — Import an existing portfolio from Excel
