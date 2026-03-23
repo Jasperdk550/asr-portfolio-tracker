@@ -26,6 +26,8 @@ from models.asset import Asset, VALID_ASSET_CLASSES
 from models.portfolio import Portfolio
 from models.simulation import SimulationModel, N_PATHS, N_YEARS
 from models.optimizer import PortfolioOptimizer
+from models.black_litterman import BlackLittermanModel, load_views, save_example_views, View
+from models.excel_importer import parse_excel, create_template, ImportResult
 from views import display, charts
 
 
@@ -54,7 +56,7 @@ def cli(ctx: click.Context, data_file: str) -> None:
     """
     \b
     ╔══════════════════════════════════════════════╗
-    ║   📈  a.s.r. Investment Portfolio Tracker    ║
+    ║     a.s.r. Investment Portfolio Tracker    ║
     ╚══════════════════════════════════════════════╝
 
     Manage your investment portfolio from the command line.
@@ -632,6 +634,250 @@ def export_data(ctx, fmt, output):
 
 
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# import-excel  —  import portfolio from Excel / CSV
+# ---------------------------------------------------------------------------
+
+@cli.command("import-excel")
+@click.option("--file",   "-f", default=None,
+              help="Path to .xlsx, .xls or .csv file to import.")
+@click.option("--sheet",  "-s", default=None,
+              help="Sheet name to read (default: first sheet).")
+@click.option("--create-template", is_flag=True, default=False,
+              help="Generate a ready-to-fill Excel template and exit.")
+@click.option("--template-path", default="portfolio_template.xlsx",
+              show_default=True,
+              help="Output path for the generated template.")
+@click.option("--yes", "-y", is_flag=True, default=False,
+              help="Skip the confirmation prompt and import immediately.")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Validate and preview only — do not write to portfolio.")
+@click.option("--data-file", default="data/portfolio.json",
+              show_default=True, help="Portfolio data file.")
+@click.pass_context
+def import_excel(ctx, file, sheet, create_template, template_path,
+                 yes, dry_run, data_file):
+    '''Import an existing portfolio from an Excel (.xlsx) or CSV file.
+
+    
+    QUICK START
+      1. Generate a template:
+           python main.py import-excel --create-template
+      2. Fill in your positions and save the file.
+      3. Import:
+           python main.py import-excel --file portfolio_template.xlsx
+
+    
+    FLEXIBLE COLUMN NAMES
+      Your spreadsheet does not need to match exactly — the importer
+      auto-recognises many common header variants:
+        Ticker / Symbol / Stock / ISIN
+        Quantity / Qty / Shares / Units / Holdings
+        Purchase Price / Avg Price / Cost / Entry Price
+        Sector / Industry / Category
+        Asset Class / Type / Class
+        Purchase Date / Buy Date / Trade Date
+        Currency / CCY
+
+    
+    EXAMPLES
+      python main.py import-excel --file my_portfolio.xlsx
+      python main.py import-excel --file portfolio.xlsx --sheet Holdings
+      python main.py import-excel --file data.xlsx --dry-run
+      python main.py import-excel --file data.csv --yes
+    '''
+    # Generate template and exit
+    if create_template:
+        path = create_template_file(template_path)
+        display.print_success(
+            f"Template created: [bold]{path}[/bold]  "
+            f"Fill in your positions and run:  "
+            f"[cyan]python main.py import-excel --file {path}[/cyan]"
+        )
+        return
+
+    if file is None:
+        display.print_error(
+            "No file specified. "
+            "Use [bold]--file PATH[/bold] or generate a template with "
+            "[bold]--create-template[/bold]."
+        )
+        return
+
+    if not os.path.exists(file):
+        display.print_error(f"File not found: [bold]{file}[/bold]")
+        return
+
+    display.print_info(f"Reading [bold]{file}[/bold]...")
+    result = parse_excel(file, sheet_name=sheet)
+    display.show_import_preview(result)
+
+    if result.n_valid == 0:
+        display.print_error("No valid rows to import. Fix the errors above and try again.")
+        return
+
+    if dry_run:
+        display.print_info("Dry-run complete. No data was written.")
+        return
+
+    # Confirmation
+    if not yes:
+        click.confirm(
+            f"Import {result.n_valid} position(s) into the portfolio?",
+            abort=True
+        )
+
+    portfolio: Portfolio = _get_portfolio(ctx)
+
+    # Fetch names from yfinance for rows where name is blank
+    display.print_info("Fetching metadata for new tickers...")
+    unique_tickers = list({r.ticker for r in result.valid_rows})
+    name_cache: dict = {}
+    for ticker in unique_tickers:
+        try:
+            info = portfolio.get_asset_info(ticker)
+            name_cache[ticker] = info.get("name", ticker)
+        except Exception:
+            name_cache[ticker] = ticker
+
+    # Add positions
+    n_imported = 0
+    for row in result.valid_rows:
+        asset = Asset(
+            ticker         = row.ticker,
+            sector         = row.sector,
+            asset_class    = row.asset_class,
+            quantity       = row.quantity,
+            purchase_price = row.purchase_price,
+            purchase_date  = row.purchase_date,
+            name           = row.name or name_cache.get(row.ticker, row.ticker),
+            currency       = row.currency,
+        )
+        portfolio.add_position(asset)
+        n_imported += 1
+
+    display.show_import_success(n_imported, skipped=result.n_errors)
+
+
+# Alias to avoid shadowing the imported function name
+create_template_file = create_template
+
+# ---------------------------------------------------------------------------
+# bl  —  Black-Litterman model
+# ---------------------------------------------------------------------------
+
+@cli.command("bl")
+@click.option("--views-file", "-v", default=None,
+              help="Path to JSON file containing investor views.")
+@click.option("--init-views", is_flag=True, default=False,
+              help="Generate a template views file and exit.")
+@click.option("--tau",   default=0.05, show_default=True,
+              type=float, help="Prior uncertainty τ (5-15%% recommended).")
+@click.option("--gamma", default=None, type=float,
+              help="Risk-aversion γ. Default: auto-calibrate from portfolio.")
+@click.option("--period", default="3y", show_default=True,
+              type=click.Choice(["1y","2y","3y","5y"], case_sensitive=False),
+              help="Historical period for covariance estimation.")
+@click.option("--save", default=None, help="Save chart to this file path.")
+@click.option("--no-graph", is_flag=True, help="Skip chart generation.")
+@click.option("--data-file", default="data/portfolio.json",
+              show_default=True, help="Portfolio data file.")
+@click.pass_context
+def black_litterman(ctx, views_file, init_views, tau, gamma, period, save,
+                    no_graph, data_file):
+    '''Run the Black-Litterman model (Black & Litterman, 1992).
+
+    
+    The BL model solves the core failure of Markowitz: extreme, unstable
+    weights.  It starts from equilibrium returns implied by your current
+    portfolio weights (μ_eq = γΣw), then blends in your views via Bayes:
+
+        μ_BL = [(τΣ)⁻¹ + P' Ω⁻¹ P]⁻¹ × [(τΣ)⁻¹ μ_eq + P' Ω⁻¹ Q]
+
+    View uncertainty Ω is calibrated via Idzorek' s method so you only
+    need to supply an intuitive 0-100% confidence level per view.
+
+    
+    Steps:
+      1. Generate a template views file:   bl --init-views
+      2. Edit views_bl.json with your views.
+      3. Run the model:                    bl --views-file views_bl.json
+
+    
+    Examples
+    --------
+      python main.py bl --init-views
+      python main.py bl --views-file views_bl.json
+      python main.py bl --views-file views_bl.json --tau 0.10 --period 5y
+    '''
+    portfolio: Portfolio = _get_portfolio(ctx)
+
+    if portfolio.is_empty():
+        display.print_warning("Portfolio is empty.")
+        return
+
+    display.print_info("Fetching current prices...")
+    try:
+        portfolio.fetch_current_prices()
+    except Exception:
+        pass
+
+    # --init-views: write template file and exit
+    if init_views:
+        out = views_file or "views_bl.json"
+        save_example_views(portfolio.get_tickers(), out)
+        display.print_success(
+            f"Template views file created: [bold]{out}[/bold]  "
+            f"Edit it, then run:  [cyan]python main.py bl --views-file {out}[/cyan]"
+        )
+        return
+
+    # Load views
+    if views_file is None:
+        display.print_error(
+            "No views file supplied. Run with [bold]--init-views[/bold] to "
+            "generate a template, or pass [bold]--views-file PATH[/bold]."
+        )
+        return
+
+    if not os.path.exists(views_file):
+        display.print_error(f"Views file not found: {views_file}")
+        return
+
+    try:
+        views = load_views(views_file)
+    except Exception as exc:
+        display.print_error(f"Could not parse views file: {exc}")
+        return
+
+    display.print_info(
+        f"Running BL with [bold]{len(views)}[/bold] views ",
+    )
+
+    bl_model = BlackLittermanModel(
+        portfolio, tau=tau, gamma=gamma, historical_period=period
+    )
+    try:
+        result = bl_model.run(views)
+    except ValueError as exc:
+        display.print_error(str(exc))
+        return
+    except Exception as exc:
+        display.print_error(f"BL computation failed: {exc}")
+        if os.environ.get("DEBUG"):
+            import traceback; traceback.print_exc()
+        return
+
+    display.show_bl_summary(result)
+
+    if not no_graph:
+        save_path  = save or _default_chart_path("black_litterman")
+        chart_path = charts.plot_black_litterman(result, save_path=save_path)
+        display.print_success(f"Chart saved to [bold]{chart_path}[/bold]")
+        _open_file(chart_path)
+
 # list  (alias for show, friendlier for newcomers)
 # ---------------------------------------------------------------------------
 
